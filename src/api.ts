@@ -766,12 +766,358 @@ export function registerRoutes(server: FastifyInstance<Server, IncomingMessage, 
       reply.send(Crypto.sign({ success: false, error: 'Error in /cycleData' }))
     }
   })
+
+  // New endpoint for parallel sync with composite cursor (receipts)
+  type ReceiptCursorRequest = FastifyRequest<{
+    Body: {
+      cycle: number
+      afterTimestamp: number
+      afterReceiptId?: string
+      beforeTimestamp?: number
+      limit?: number
+    }
+  }>
+
+  server.post('/receipt/cycle-cursor', async (_request: ReceiptCursorRequest & Request, reply) => {
+    const requestData = _request.body
+    const result = validateRequestData(requestData, {
+      cycle: 'n',
+      afterTimestamp: 'n',
+      afterReceiptId: 's?',
+      beforeTimestamp: 'n?',
+      limit: 'n?',
+      sender: 's',
+      sign: 'o',
+    })
+
+    if (!result.success) {
+      reply.status(400).send(Crypto.sign({ success: false, error: result.error }))
+      return
+    }
+
+    const { cycle, afterTimestamp, afterReceiptId = '', beforeTimestamp, limit = 500 } = requestData
+
+    if (cycle < 0 || Number.isNaN(cycle)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid cycle number' }))
+      return
+    }
+
+    if (afterTimestamp < 0 || Number.isNaN(afterTimestamp)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid afterTimestamp' }))
+      return
+    }
+
+    if (limit > MAX_RECEIPTS_PER_REQUEST) {
+      reply.send(Crypto.sign({ success: false, error: `Max limit is ${MAX_RECEIPTS_PER_REQUEST}` }))
+      return
+    }
+
+    try {
+      const receipts = await ReceiptDB.queryReceiptsByCycleCursor(
+        cycle,
+        afterTimestamp,
+        afterReceiptId,
+        beforeTimestamp,
+        limit
+      )
+
+      reply.send(Crypto.sign({ success: true, receipts }))
+    } catch (error) {
+      Logger.mainLogger.error('Error in /receipt/cycle-cursor:', error)
+      reply.send(Crypto.sign({ success: false, error: 'Error fetching receipts' }))
+    }
+  })
+
+  // New endpoint for parallel sync with composite cursor (originalTxs)
+  type OriginalTxCursorRequest = FastifyRequest<{
+    Body: {
+      cycle: number
+      afterTimestamp: number
+      afterTxId?: string
+      beforeTimestamp?: number
+      limit?: number
+    }
+  }>
+
+  server.post('/originalTx/cycle-cursor', async (_request: OriginalTxCursorRequest & Request, reply) => {
+    const requestData = _request.body
+    const result = validateRequestData(requestData, {
+      cycle: 'n',
+      afterTimestamp: 'n',
+      afterTxId: 's?',
+      beforeTimestamp: 'n?',
+      limit: 'n?',
+      sender: 's',
+      sign: 'o',
+    })
+
+    if (!result.success) {
+      reply.status(400).send(Crypto.sign({ success: false, error: result.error }))
+      return
+    }
+
+    const { cycle, afterTimestamp, afterTxId = '', beforeTimestamp, limit = 500 } = requestData
+
+    if (cycle < 0 || Number.isNaN(cycle)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid cycle number' }))
+      return
+    }
+
+    if (afterTimestamp < 0 || Number.isNaN(afterTimestamp)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid afterTimestamp' }))
+      return
+    }
+
+    if (limit > MAX_ORIGINAL_TXS_PER_REQUEST) {
+      reply.send(Crypto.sign({ success: false, error: `Max limit is ${MAX_ORIGINAL_TXS_PER_REQUEST}` }))
+      return
+    }
+
+    try {
+      const originalTxs = await OriginalTxDB.queryOriginalTxsDataByCycleCursor(
+        cycle,
+        afterTimestamp,
+        afterTxId,
+        beforeTimestamp,
+        limit
+      )
+
+      reply.send(Crypto.sign({ success: true, originalTxs }))
+    } catch (error) {
+      Logger.mainLogger.error('Error in /originalTx/cycle-cursor:', error)
+      reply.send(Crypto.sign({ success: false, error: 'Error fetching originalTxs' }))
+    }
+  })
+
+  // Multi-cycle endpoint for parallel sync (receipts)
+  type ReceiptMultiCycleRequest = FastifyRequest<{
+    Body: {
+      startCycle: number
+      endCycle: number
+      afterCycle: number
+      afterTimestamp: number
+      afterReceiptId?: string
+      limit?: number
+    }
+  }>
+
+  server.post('/receipt/multi-cycle-cursor', async (_request: ReceiptMultiCycleRequest & Request, reply) => {
+    const requestData = _request.body
+    const result = validateRequestData(requestData, {
+      startCycle: 'n',
+      endCycle: 'n',
+      afterCycle: 'n',
+      afterTimestamp: 'n',
+      afterReceiptId: 's?',
+      limit: 'n?',
+      sender: 's',
+      sign: 'o',
+    })
+
+    if (!result.success) {
+      reply.status(400).send(Crypto.sign({ success: false, error: result.error }))
+      return
+    }
+
+    const { startCycle, endCycle, afterCycle, afterTimestamp, afterReceiptId = '', limit = 500 } = requestData
+
+    if (startCycle < 0 || endCycle < startCycle || Number.isNaN(startCycle) || Number.isNaN(endCycle)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid cycle range' }))
+      return
+    }
+
+    if (afterCycle < startCycle || afterCycle > endCycle) {
+      reply.send(Crypto.sign({ success: false, error: 'afterCycle must be within startCycle-endCycle range' }))
+      return
+    }
+
+    if (afterTimestamp < 0 || Number.isNaN(afterTimestamp)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid afterTimestamp' }))
+      return
+    }
+
+    if (limit > MAX_RECEIPTS_PER_REQUEST) {
+      reply.send(Crypto.sign({ success: false, error: `Max limit is ${MAX_RECEIPTS_PER_REQUEST}` }))
+      return
+    }
+
+    try {
+      const requestStartTime = Date.now()
+
+      // Build cycle array
+      const cycles: number[] = []
+      for (let i = startCycle; i <= endCycle; i++) {
+        cycles.push(i)
+      }
+
+      const dbStartTime = Date.now()
+      const receipts = await ReceiptDB.queryReceiptsMultiCycleCursor(
+        cycles,
+        afterCycle,
+        afterTimestamp,
+        afterReceiptId,
+        limit
+      )
+      const dbElapsed = Date.now() - dbStartTime
+      const response = { success: true, receipts }
+
+      const skipSigning = true
+
+      // Time the signing operation
+      const signStartTime = Date.now()
+      const signedResponse = skipSigning ? response : Crypto.sign(response)
+      const signElapsed = Date.now() - signStartTime
+
+      // Time the serialization operation
+      const serializeStart = Date.now()
+      // const responseJson = StringUtils.safeStringify(signedResponse)
+      reply.send(signedResponse)
+      const serializeElapsed = Date.now() - serializeStart
+
+      // Send pre-stringified JSON
+      // reply.type('application/json').send(responseJson)
+
+      const totalElapsed = Date.now() - requestStartTime
+
+      // Calculate response size
+      // const responseSizeBytes = responseJson.length
+      const responseSizeBytes = 0
+      const responseSizeKB = (responseSizeBytes / 1024).toFixed(2)
+
+      if (config.VERBOSE || totalElapsed > 500) {
+        const requestId = _request.id
+        const queueMs = typeof _request._timingQueueMs === 'number' ? `${_request._timingQueueMs.toFixed(1)}ms` : 'n/a'
+        Logger.mainLogger.debug(
+          `[Distributor API Timing] /receipt/multi-cycle-cursor - ${process.pid} : ` +
+            `reqId=${requestId}, queue=${queueMs}, ` +
+            `total=${totalElapsed}ms, db=${dbElapsed}ms, sign=${signElapsed}ms, serialize=${serializeElapsed}ms, ` +
+            `cycles=${startCycle}-${endCycle}, records=${receipts.length}, ` +
+            `size=${responseSizeKB}KB`
+        )
+      }
+    } catch (error) {
+      Logger.mainLogger.error('Error in /receipt/multi-cycle-cursor:', error)
+      reply.send(Crypto.sign({ success: false, error: 'Error fetching receipts' }))
+    }
+  })
+
+  // Multi-cycle endpoint for parallel sync (originalTxs)
+  type OriginalTxMultiCycleRequest = FastifyRequest<{
+    Body: {
+      startCycle: number
+      endCycle: number
+      afterCycle: number
+      afterTimestamp: number
+      afterTxId?: string
+      limit?: number
+    }
+  }>
+
+  server.post('/originalTx/multi-cycle-cursor', async (_request: OriginalTxMultiCycleRequest & Request, reply) => {
+    const requestData = _request.body
+    const result = validateRequestData(requestData, {
+      startCycle: 'n',
+      endCycle: 'n',
+      afterCycle: 'n',
+      afterTimestamp: 'n',
+      afterTxId: 's?',
+      limit: 'n?',
+      sender: 's',
+      sign: 'o',
+    })
+
+    if (!result.success) {
+      reply.status(400).send(Crypto.sign({ success: false, error: result.error }))
+      return
+    }
+
+    const { startCycle, endCycle, afterCycle, afterTimestamp, afterTxId = '', limit = 500 } = requestData
+
+    if (startCycle < 0 || endCycle < startCycle || Number.isNaN(startCycle) || Number.isNaN(endCycle)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid cycle range' }))
+      return
+    }
+
+    if (afterCycle < startCycle || afterCycle > endCycle) {
+      reply.send(Crypto.sign({ success: false, error: 'afterCycle must be within startCycle-endCycle range' }))
+      return
+    }
+
+    if (afterTimestamp < 0 || Number.isNaN(afterTimestamp)) {
+      reply.send(Crypto.sign({ success: false, error: 'Invalid afterTimestamp' }))
+      return
+    }
+
+    if (limit > MAX_ORIGINAL_TXS_PER_REQUEST) {
+      reply.send(Crypto.sign({ success: false, error: `Max limit is ${MAX_ORIGINAL_TXS_PER_REQUEST}` }))
+      return
+    }
+
+    try {
+      const requestStartTime = Date.now()
+
+      // Build cycle array
+      const cycles: number[] = []
+      for (let i = startCycle; i <= endCycle; i++) {
+        cycles.push(i)
+      }
+
+      const dbStartTime = Date.now()
+      const originalTxs = await OriginalTxDB.queryOriginalTxsDataMultiCycleCursor(
+        cycles,
+        afterCycle,
+        afterTimestamp,
+        afterTxId,
+        limit
+      )
+      const dbElapsed = Date.now() - dbStartTime
+      const response = { success: true, originalTxs }
+
+      const skipSigning = true
+
+      // Time the signing operation
+      const signStartTime = Date.now()
+      const signedResponse = skipSigning ? response : Crypto.sign(response)
+      const signElapsed = Date.now() - signStartTime
+
+      // Time the serialization operation
+      const serializeStart = Date.now()
+      // const responseJson = StringUtils.safeStringify(signedResponse)
+      reply.send(signedResponse)
+      const serializeElapsed = Date.now() - serializeStart
+
+      // Send pre-stringified JSON
+      // reply.type('application/json').send(responseJson)
+
+      const totalElapsed = Date.now() - requestStartTime
+
+      // Calculate response size
+      // const responseSizeBytes = responseJson.length
+      const responseSizeBytes = 0
+      const responseSizeKB = (responseSizeBytes / 1024).toFixed(2)
+
+      if (config.VERBOSE || totalElapsed > 500) {
+        const requestId = _request.id
+        const queueMs = typeof _request._timingQueueMs === 'number' ? `${_request._timingQueueMs.toFixed(1)}ms` : 'n/a'
+        Logger.mainLogger.debug(
+          `[Distributor API Timing] /originalTx/multi-cycle-cursor - ${process.pid} : ` +
+            `reqId=${requestId}, queue=${queueMs}, ` +
+            `total=${totalElapsed}ms, db=${dbElapsed}ms, sign=${signElapsed}ms, serialize=${serializeElapsed}ms, ` +
+            `cycles=${startCycle}-${endCycle}, records=${originalTxs.length}, ` +
+            `size=${responseSizeKB}KB`
+        )
+      }
+    } catch (error) {
+      Logger.mainLogger.error('Error in /originalTx/multi-cycle-cursor:', error)
+      reply.send(Crypto.sign({ success: false, error: 'Error fetching originalTxs' }))
+    }
+  })
 }
 
 export const validateRequestData = (
   data: RequestBody,
   expectedDataType: {
-    [key: string]: 'n?' | 's?' | 'o' | 's'
+    [key: string]: 'n?' | 's?' | 'o' | 's' | 'n'
   }
 ): {
   success: boolean

@@ -6,6 +6,8 @@ import * as Logger from '../Logger'
 import { config, distributorMode } from '../Config'
 import DataLogReader from '../log-reader'
 import fastifyCors from '@fastify/cors'
+// import fastifyCompress from '@fastify/compress'
+import fastifyTimingPlugin from './fastifyTimingPlugin'
 import type { Worker } from 'node:cluster'
 import { handleSocketRequest, registerParentProcessListener, registerDataReaderListeners } from './child'
 import Fastify, { FastifyInstance } from 'fastify'
@@ -35,10 +37,38 @@ export const initHttpServer = async (worker: Worker): Promise<void> => {
     httpServer = http.createServer((req, res) => {
       handler(req, res)
     })
+
+    // Optimize TCP socket settings for large response payloads
+    httpServer.on('connection', (socket) => {
+      try {
+        // Disable Nagle's algorithm - send data immediately without buffering
+        // Reduces latency for large responses
+        socket.setNoDelay(true)
+        // Enable keep-alive to reuse connections
+        socket.setKeepAlive(true, 30000)
+      } catch (error) {
+        Logger.mainLogger.warn('Failed to set socket options:', error)
+      }
+    })
+
     return httpServer
   }
 
-  const fastifyServer = Fastify({ serverFactory })
+  const fastifyServer = Fastify({
+    serverFactory,
+    logger: true,
+    connectionTimeout: 0, // Disable connection timeout (allow long-running requests)
+    bodyLimit: 1 * 1024 * 1024, // 1MB limit for incoming REQUEST bodies (not responses)
+  })
+  await fastifyServer.register(fastifyTimingPlugin)
+
+  // // Register compression middleware [ compression has some issues ]
+  // await fastifyServer.register(fastifyCompress, {
+  //   global: true,
+  //   threshold: 1024, // Only compress responses larger than 1KB
+  //   encodings: ['gzip', 'deflate'],
+  // })
+
   await fastifyServer.register(fastifyCors)
   await fastifyServer.register(fastifyRateLimit, {
     global: true,
