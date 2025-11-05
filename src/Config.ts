@@ -35,6 +35,7 @@ export interface Config {
   subscribers: [] | Subscriber[]
   distributorMode: string
   MQ_DISTRIBUTOR_SERVER_PORT: number
+  FASTIFY_COMPRESSION_ENABLED: boolean
 }
 
 let config: Config = {
@@ -65,6 +66,7 @@ let config: Config = {
   subscribers: [],
   distributorMode: process.env.DISTRIBUTOR_MODE || distributorMode.WS.toString(),
   MQ_DISTRIBUTOR_SERVER_PORT: 6101,
+  FASTIFY_COMPRESSION_ENABLED: true, // Enable compression by default (gzip, deflate)
 }
 
 export interface Subscriber {

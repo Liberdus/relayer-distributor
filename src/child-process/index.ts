@@ -6,7 +6,7 @@ import * as Logger from '../Logger'
 import { config, distributorMode } from '../Config'
 import DataLogReader from '../log-reader'
 import fastifyCors from '@fastify/cors'
-// import fastifyCompress from '@fastify/compress'
+import fastifyCompress from '@fastify/compress'
 import fastifyTimingPlugin from './fastifyTimingPlugin'
 import type { Worker } from 'node:cluster'
 import { handleSocketRequest, registerParentProcessListener, registerDataReaderListeners } from './child'
@@ -62,12 +62,17 @@ export const initHttpServer = async (worker: Worker): Promise<void> => {
   })
   await fastifyServer.register(fastifyTimingPlugin)
 
-  // // Register compression middleware [ compression has some issues ]
-  // await fastifyServer.register(fastifyCompress, {
-  //   global: true,
-  //   threshold: 1024, // Only compress responses larger than 1KB
-  //   encodings: ['gzip', 'deflate'],
-  // })
+  // Register compression middleware  [ Optional - reduces payload size - but doesn't seem to help much in syncing performance ]
+  if (config.FASTIFY_COMPRESSION_ENABLED) {
+    await fastifyServer.register(fastifyCompress, {
+      global: true,
+      threshold: 1024, // Only compress responses larger than 1KB
+      encodings: ['gzip', 'deflate'],
+    })
+    Logger.mainLogger.info('Fastify compression enabled (gzip, deflate)')
+  } else {
+    Logger.mainLogger.info('Fastify compression disabled')
+  }
 
   await fastifyServer.register(fastifyCors)
   await fastifyServer.register(fastifyRateLimit, {
@@ -88,8 +93,32 @@ export const initHttpServer = async (worker: Worker): Promise<void> => {
     }
   })
 
-  fastifyServer.setReplySerializer((payload) => {
-    return StringUtils.safeStringify(payload)
+  fastifyServer.setReplySerializer(function (payload) {
+    // Time the serialization operation
+    const serializeStart = Date.now()
+    const stringified = StringUtils.safeStringify(payload)
+    const serializeElapsed = Date.now() - serializeStart
+    const sizeBytes = Buffer.byteLength(stringified)
+
+    // Debug: Check if this.request is available
+    console.log('[Serializer Debug]', {
+      hasThis: !!this,
+      hasRequest: !!(this && this.request),
+      serializeMs: serializeElapsed,
+      sizeBytes,
+    })
+
+    // Store serialization metrics on request for API timing logs
+    if (this && this.request) {
+      this.request._serializeMs = serializeElapsed
+      this.request._serializedBytes = sizeBytes
+      console.log('[Serializer Debug] Stored metrics on request:', {
+        _serializeMs: this.request._serializeMs,
+        _serializedBytes: this.request._serializedBytes,
+      })
+    }
+
+    return stringified
   })
 
   // Register API routes
