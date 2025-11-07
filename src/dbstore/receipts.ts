@@ -5,6 +5,7 @@ import * as Logger from '../Logger'
 import { config } from '../Config'
 import { DeSerializeFromJsonString } from '../utils/serialization'
 import { AccountsCopy } from '../dbstore/accounts'
+import { MAX_RECEIPTS_PER_REQUEST } from '../api'
 
 export type Proposal = {
   applied: boolean
@@ -287,107 +288,41 @@ function deserializeDBReceipt(receipt: DBReceipt): void {
 }
 
 /**
- * Query receipts for a specific cycle using composite cursor pagination
- * This prevents data loss when multiple receipts have the same timestamp
- * @param cycle - The cycle number to query
- * @param afterTimestamp - Cursor timestamp (fetch records after this)
- * @param afterReceiptId - Cursor receiptId (for records with same timestamp)
- * @param beforeTimestamp - Optional upper bound timestamp
- * @param limit - Maximum number of records to return
- */
-export async function queryReceiptsByCycleCursor(
-  cycle: number,
-  afterTimestamp: number,
-  afterReceiptId: string = '',
-  beforeTimestamp?: number,
-  limit: number = 500
-): Promise<Receipt[]> {
-  let receipts: Receipt[] = []
-  try {
-    // Use cycle as the source of truth, no timestamp upper bound
-    // This prevents data loss if receipts have timestamps outside cycle boundaries
-    const sql = `
-      SELECT * FROM receipts
-      WHERE cycle = ?
-        AND (timestamp > ? OR (timestamp = ? AND receiptId > ?))
-      ORDER BY timestamp ASC, receiptId ASC
-      LIMIT ?
-    `
-    const params: (number | string)[] = [cycle, afterTimestamp, afterTimestamp, afterReceiptId, limit]
-
-    receipts = (await db.all(receiptDatabase, sql, params)) as DBReceipt[]
-    if (receipts.length > 0) {
-      receipts.forEach((receipt: DBReceipt) => {
-        deserializeDBReceipt(receipt)
-      })
-    }
-  } catch (e) {
-    Logger.mainLogger.error('Error in queryReceiptsByCycleCursor:', e)
-  }
-  if (config.VERBOSE) {
-    Logger.mainLogger.debug(
-      `Receipts by cycle cursor - cycle: ${cycle}, count: ${receipts.length}, afterTimestamp: ${afterTimestamp}, afterReceiptId: ${afterReceiptId}`
-    )
-  }
-  return receipts as unknown as Receipt[]
-}
-
-/**
- * Query receipts across multiple cycles using composite cursor pagination
+ * Query receipts between cycles range with ( timestamp + txId ) pagination
  * Optimized for fetching small cycles in batches to reduce HTTP overhead
  *
- * Example usage:
- *   Request: cycles=[100,101,102], limit=500
- *   Response: 450 receipts from cycles 100-101
- *   Next request: cycles=[101,102], afterCycle=101, afterTimestamp=X, afterReceiptId=Y
- *
- * @param cycles - Array of cycle numbers to query (must be in ascending order)
- * @param afterCycle - Cursor cycle number (resume from this cycle)
- * @param afterTimestamp - Cursor timestamp within the afterCycle
- * @param afterReceiptId - Cursor receiptId (for records with same timestamp)
- * @param limit - Maximum number of records to return across all cycles
+ * @param startCycle - Start cycle number to query (inclusive)
+ * @param endCycle - End cycle number to query (inclusive)
+ * @param afterTimestamp - timestamp (fetch records after the given timestamp)
+ * @param afterTxId - txId (for records with same timestamp)
+ * @param limit - Maximum number of records to return
  */
-export async function queryReceiptsMultiCycleCursor(
-  cycles: number[],
-  afterCycle: number,
+export async function queryReceiptsByCycleRange(
+  startCycle: number,
+  endCycle: number,
   afterTimestamp: number,
-  afterReceiptId: string = '',
-  limit: number = 500
+  afterTxId = '',
+  limit: number = MAX_RECEIPTS_PER_REQUEST
 ): Promise<Receipt[]> {
   let receipts: Receipt[] = []
   try {
-    if (cycles.length === 0) {
-      return receipts
-    }
-
-    // Build WHERE clause for cycle range
-    const minCycle = Math.min(...cycles)
-    const maxCycle = Math.max(...cycles)
-
-    // Fetch across cycle range with composite cursor
-    const sql = `
+    // Fetch between cycles range
+    let sql = `
       SELECT * FROM receipts
       WHERE cycle BETWEEN ? AND ?
-        AND (
-          cycle > ?
-          OR (cycle = ? AND timestamp > ?)
-          OR (cycle = ? AND timestamp = ? AND receiptId > ?)
-        )
-      ORDER BY cycle ASC, timestamp ASC, receiptId ASC
+    `
+    const params: (number | string)[] = [startCycle, endCycle]
+    if (afterTimestamp > 0 && afterTxId !== '') {
+      sql += ` AND timestamp = ? AND receiptId > ?`
+      params.push(afterTimestamp, afterTxId)
+    } else if (afterTimestamp > 0) {
+      sql += ` AND timestamp > ?`
+      params.push(afterTimestamp)
+    }
+    sql += ` ORDER BY cycle ASC, timestamp ASC, receiptId ASC
       LIMIT ?
     `
-
-    const params: (number | string)[] = [
-      minCycle,
-      maxCycle,
-      afterCycle,
-      afterCycle,
-      afterTimestamp,
-      afterCycle,
-      afterTimestamp,
-      afterReceiptId,
-      limit,
-    ]
+    params.push(limit)
 
     // Time the SQL query
     // NOTE: queryElapsed = queueMs (lock wait) + engineMs (actual SQL execution)
@@ -409,14 +344,13 @@ export async function queryReceiptsMultiCycleCursor(
     const totalElapsed = queryElapsed + deserializeElapsed
     const avgTimePerRecord = receipts.length > 0 ? (totalElapsed / receipts.length).toFixed(2) : '0'
     const hitLimit = receipts.length === limit
-    const cycleRange = `${minCycle}-${maxCycle}`
 
     // Log detailed timing breakdown with enhanced diagnostics
     // Lower threshold to 250ms to catch lock contention (high queueMs)
     if (config.VERBOSE || queryElapsed > 250) {
       Logger.mainLogger.debug(
         `[DB Timing] Receipts multi-cycle cursor - ${process.pid} : ` +
-          `range=${cycleRange}, cursor=(cycle:${afterCycle}, ts:${afterTimestamp}, id:${afterReceiptId.slice(0, 8)}...), ` +
+          `range=${startCycle}-${endCycle}, ts:${afterTimestamp}, id:${afterTxId.slice(0, 8)}...), ` +
           `query=${queryElapsed}ms, deserialize=${deserializeElapsed}ms, count=${receipts.length}/${limit}, ` +
           `avg=${avgTimePerRecord}ms/rec, hitLimit=${hitLimit}`
       )
@@ -426,14 +360,14 @@ export async function queryReceiptsMultiCycleCursor(
     if (queryElapsed > 500) {
       Logger.mainLogger.warn(
         `[SLOW QUERY] Receipts multi-cycle cursor - ${process.pid} took ${queryElapsed}ms - ` +
-          `range=${cycleRange}, afterCycle=${afterCycle}, count=${receipts.length}, ` +
+          `range=${startCycle}-${endCycle}, count=${receipts.length}, ` +
           `High queryElapsed usually indicates lock contention (high queueMs waiting for database lock). ` +
           `Check sqlite3storage [DB Timing] logs for queueMs vs engineMs breakdown. ` +
           `If queueMs > 250ms, consider increasing NUMBER_OF_WORKERS or reducing PARALLEL_SYNC_CONCURRENCY.`
       )
     }
   } catch (e) {
-    Logger.mainLogger.error('Error in queryReceiptsMultiCycleCursor:', e)
+    Logger.mainLogger.error('Error in queryReceiptsByCycleRange:', e)
   }
   return receipts as unknown as Receipt[]
 }
