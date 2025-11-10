@@ -29,9 +29,10 @@ export default fp(async function fastifyTimingPlugin(fastify) {
     req._tHandlerStart = now
   })
 
-  fastify.addHook('preSerialization', async (req) => {
-    req._tPreSerialization = process.hrtime.bigint()
-  })
+  // [TODO - Fix the issue with preSerialization hook]
+  // fastify.addHook('preSerialization', async (req) => {
+  //   req._tPreSerialization = process.hrtime.bigint()
+  // })
 
   fastify.addHook('onSend', async (req, reply, payload) => {
     const tOnSend = process.hrtime.bigint()
@@ -66,7 +67,7 @@ export default fp(async function fastifyTimingPlugin(fastify) {
     const t0 = req._t0 ?? process.hrtime.bigint()
     const tHandlerStart = req._tHandlerStart ?? t0
     const tPreSerialization = req._tPreSerialization ?? tHandlerStart
-    const tOnSend = req._tOnSend ?? tHandlerStart
+    const tOnSend = req._tOnSend ?? tPreSerialization
     const tEnd = process.hrtime.bigint()
 
     const preMs = req._timingQueueMs ?? Number(tHandlerStart - t0) / 1e6 // parsing/validation hooks

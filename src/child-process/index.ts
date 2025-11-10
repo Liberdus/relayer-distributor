@@ -93,32 +93,8 @@ export const initHttpServer = async (worker: Worker): Promise<void> => {
     }
   })
 
-  fastifyServer.setReplySerializer(function (payload) {
-    // Time the serialization operation
-    const serializeStart = Date.now()
-    const stringified = StringUtils.safeStringify(payload)
-    const serializeElapsed = Date.now() - serializeStart
-    const sizeBytes = Buffer.byteLength(stringified)
-
-    // Debug: Check if this.request is available
-    console.log('[Serializer Debug]', {
-      hasThis: !!this,
-      hasRequest: !!(this && this.request),
-      serializeMs: serializeElapsed,
-      sizeBytes,
-    })
-
-    // Store serialization metrics on request for API timing logs
-    if (this && this.request) {
-      this.request._serializeMs = serializeElapsed
-      this.request._serializedBytes = sizeBytes
-      console.log('[Serializer Debug] Stored metrics on request:', {
-        _serializeMs: this.request._serializeMs,
-        _serializedBytes: this.request._serializedBytes,
-      })
-    }
-
-    return stringified
+  fastifyServer.setReplySerializer((payload) => {
+    return StringUtils.safeStringify(payload)
   })
 
   // Register API routes
