@@ -263,27 +263,27 @@ function logTiming(operation: string, entry: QueryTiming, rows?: number): void {
 
   if (totalMs > SQL_TOTAL_WARN_THRESHOLD_MS || queueMs > SQL_QUEUE_WARN_THRESHOLD_MS) {
     const payloadWithoutSql = { ...payload, sql: undefined }
-    logWarn('[DB Timing]', JSON.stringify(payloadWithoutSql, null, 2))
+    logWarn('[DB Timing]', JSON.stringify(payloadWithoutSql))
   }
 }
 
 function logInfo(...args: any[]): void {
-  if (Logger.mainLogger) Logger.mainLogger.info(args)
+  if (Logger.mainLogger) Logger.mainLogger.info(args.join(' '))
   else console.log(args)
 }
 
 function logWarn(...args: any[]): void {
-  if (Logger.mainLogger) Logger.mainLogger.warn(args)
+  if (Logger.mainLogger) Logger.mainLogger.warn(args.join(' '))
   else console.warn(args)
 }
 
 function logDebug(...args: any[]): void {
-  if (Logger.mainLogger) Logger.mainLogger.debug(args)
+  if (Logger.mainLogger) Logger.mainLogger.debug(args.join(' '))
   else console.log(args)
 }
 
 function logError(...args: any[]): void {
-  if (Logger.mainLogger) Logger.mainLogger.error(args)
+  if (Logger.mainLogger) Logger.mainLogger.error(args.join(' '))
   else console.error(args)
 }
 
