@@ -175,14 +175,17 @@ export async function queryLatestOriginalTxs(count: number): Promise<DBOriginalT
 }
 
 /**
- * Query originalTxsData between cycles range with ( timestamp + txId ) pagination
- * Optimized for fetching small cycles in batches to reduce HTTP overhead
+ * Fetch originalTxsData within a specific cycle range using lexicographic pagination
+ * over (cycle, timestamp, receiptId).
  *
- * @param startCycle - Start cycle number to query (inclusive)
- * @param endCycle - End cycle number to query (inclusive)
- * @param afterTimestamp - timestamp (fetch records after the given timestamp)
- * @param afterTxId - txId (for records with same timestamp)
- * @param limit - Maximum number of records to return
+ * This ensures deterministic ordering and seamless continuation between pages,
+ * even when multiple originalTxsData share the same timestamp or span across different cycles.
+ *
+ * @param startCycle - Inclusive lower bound for the cycle range
+ * @param endCycle - Inclusive upper bound for the cycle range
+ * @param afterTimestamp - Cursor timestamp; fetch records after this
+ * @param afterTxId - Cursor txId (for records with identical timestamps)
+ * @param limit - Max number of records to return
  */
 export async function queryOriginalTxsDataByCycleRange(
   startCycle: number,
@@ -193,23 +196,30 @@ export async function queryOriginalTxsDataByCycleRange(
 ): Promise<OriginalTxData[]> {
   let originalTxsData: OriginalTxData[] = []
   try {
-    // Fetch between cycles range
-    let sql = `
+    const sql = `
       SELECT * FROM originalTxsData
       WHERE cycle BETWEEN ? AND ?
-    `
-    const params: (number | string)[] = [startCycle, endCycle]
-    if (afterTimestamp > 0 && afterTxId !== '') {
-      sql += ` AND timestamp = ? AND txId > ?`
-      params.push(afterTimestamp, afterTxId)
-    } else if (afterTimestamp > 0) {
-      sql += ` AND timestamp > ?`
-      params.push(afterTimestamp)
-    }
-    sql += ` ORDER BY cycle ASC, timestamp ASC, txId ASC
+        AND (
+          cycle > ?
+          OR (cycle = ? AND timestamp > ?)
+          OR (cycle = ? AND timestamp = ? AND txId > ?)
+        )
+      ORDER BY cycle ASC, timestamp ASC, txId ASC
       LIMIT ?
     `
-    params.push(limit)
+
+    const params: (number | string)[] = [
+      startCycle,
+      endCycle,
+      startCycle,
+      startCycle,
+      afterTimestamp,
+      startCycle,
+      afterTimestamp,
+      afterTxId,
+      limit,
+    ]
+
 
     // Time the SQL query
     // NOTE: queryElapsed = queueMs (lock wait) + engineMs (actual SQL execution)
@@ -220,11 +230,11 @@ export async function queryOriginalTxsDataByCycleRange(
 
     // Time the deserialization
     const deserializeStartTime = Date.now()
-    if (originalTxsData.length > 0) {
-      originalTxsData.forEach((tx: DBOriginalTxData) => {
-        if (tx.originalTxData) tx.originalTxData = DeSerializeFromJsonString(tx.originalTxData)
-      })
-    }
+    // if (originalTxsData.length > 0) {
+    //   originalTxsData.forEach((tx: DBOriginalTxData) => {
+    //     if (tx.originalTxData) tx.originalTxData = DeSerializeFromJsonString(tx.originalTxData)
+    //   })
+    // }
     const deserializeElapsed = Date.now() - deserializeStartTime
 
     // Calculate metrics

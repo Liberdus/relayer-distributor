@@ -288,14 +288,17 @@ function deserializeDBReceipt(receipt: DBReceipt): void {
 }
 
 /**
- * Query receipts between cycles range with ( timestamp + txId ) pagination
- * Optimized for fetching small cycles in batches to reduce HTTP overhead
+ * Fetch receipts within a specific cycle range using lexicographic pagination
+ * over (cycle, timestamp, receiptId).
  *
- * @param startCycle - Start cycle number to query (inclusive)
- * @param endCycle - End cycle number to query (inclusive)
- * @param afterTimestamp - timestamp (fetch records after the given timestamp)
- * @param afterTxId - txId (for records with same timestamp)
- * @param limit - Maximum number of records to return
+ * This ensures deterministic ordering and seamless continuation between pages,
+ * even when multiple receipts share the same timestamp or span across different cycles.
+ *
+ * @param startCycle - Inclusive lower bound for the cycle range
+ * @param endCycle - Inclusive upper bound for the cycle range
+ * @param afterTimestamp - Cursor timestamp; fetch records after this
+ * @param afterTxId - Cursor txId (for records with identical timestamps)
+ * @param limit - Max number of records to return
  */
 export async function queryReceiptsByCycleRange(
   startCycle: number,
@@ -306,23 +309,29 @@ export async function queryReceiptsByCycleRange(
 ): Promise<Receipt[]> {
   let receipts: Receipt[] = []
   try {
-    // Fetch between cycles range
-    let sql = `
+    const sql = `
       SELECT * FROM receipts
       WHERE cycle BETWEEN ? AND ?
-    `
-    const params: (number | string)[] = [startCycle, endCycle]
-    if (afterTimestamp > 0 && afterTxId !== '') {
-      sql += ` AND timestamp = ? AND receiptId > ?`
-      params.push(afterTimestamp, afterTxId)
-    } else if (afterTimestamp > 0) {
-      sql += ` AND timestamp > ?`
-      params.push(afterTimestamp)
-    }
-    sql += ` ORDER BY cycle ASC, timestamp ASC, receiptId ASC
+        AND (
+          cycle > ?
+          OR (cycle = ? AND timestamp > ?)
+          OR (cycle = ? AND timestamp = ? AND receiptId > ?)
+        )
+      ORDER BY cycle ASC, timestamp ASC, receiptId ASC
       LIMIT ?
     `
-    params.push(limit)
+
+    const params: (number | string)[] = [
+      startCycle,
+      endCycle,
+      startCycle,
+      startCycle,
+      afterTimestamp,
+      startCycle,
+      afterTimestamp,
+      afterTxId,
+      limit,
+    ]
 
     // Time the SQL query
     // NOTE: queryElapsed = queueMs (lock wait) + engineMs (actual SQL execution)
@@ -333,11 +342,11 @@ export async function queryReceiptsByCycleRange(
 
     // Time the deserialization
     const deserializeStartTime = Date.now()
-    if (receipts.length > 0) {
-      receipts.forEach((receipt: DBReceipt) => {
-        deserializeDBReceipt(receipt)
-      })
-    }
+    // if (receipts.length > 0) {
+    //   receipts.forEach((receipt: DBReceipt) => {
+    //     deserializeDBReceipt(receipt)
+    //   })
+    // }
     const deserializeElapsed = Date.now() - deserializeStartTime
 
     // Calculate metrics
@@ -349,7 +358,7 @@ export async function queryReceiptsByCycleRange(
     // Lower threshold to 250ms to catch lock contention (high queueMs)
     if (config.VERBOSE || queryElapsed > 250) {
       Logger.mainLogger.debug(
-        `[DB Timing] Receipts multi-cycle cursor - ${process.pid} : ` +
+        `[DB Timing] Receipts by cycle range - ${process.pid} : ` +
           `range=${startCycle}-${endCycle}, ts:${afterTimestamp}, id:${afterTxId.slice(0, 8)}...), ` +
           `query=${queryElapsed}ms, deserialize=${deserializeElapsed}ms, count=${receipts.length}/${limit}, ` +
           `avg=${avgTimePerRecord}ms/rec, hitLimit=${hitLimit}`
@@ -359,7 +368,7 @@ export async function queryReceiptsByCycleRange(
     // Warn on slow queries with more context
     if (queryElapsed > 500) {
       Logger.mainLogger.warn(
-        `[SLOW QUERY] Receipts multi-cycle cursor - ${process.pid} took ${queryElapsed}ms - ` +
+        `[SLOW QUERY] Receipts by cycle range - ${process.pid} took ${queryElapsed}ms - ` +
           `range=${startCycle}-${endCycle}, count=${receipts.length}, ` +
           `High queryElapsed usually indicates lock contention (high queueMs waiting for database lock). ` +
           `Check sqlite3storage [DB Timing] logs for queueMs vs engineMs breakdown. ` +
