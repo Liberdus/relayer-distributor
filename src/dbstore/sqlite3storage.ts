@@ -86,7 +86,6 @@ export const readFromDB = async (dbPath: string, dbName: string): Promise<Databa
   await run(db, 'PRAGMA temp_store = MEMORY')
   await run(db, 'PRAGMA query_only = 1') // Read-only mode - reduces lock contention for queries
   await run(db, 'PRAGMA cache_size = -128000') // Increased to ~128MB cache for better performance
-  await run(db, 'PRAGMA wal_autocheckpoint = 5000') // Checkpoint every 5000 pages (less frequent = less lock contention)
   await run(db, 'PRAGMA mmap_size = 536870912') // 512MB memory-mapped I/O for faster reads (reduced disk I/O)
   await run(db, 'PRAGMA busy_timeout = 30000') // Wait up to 30s if database is locked
   await run(db, 'PRAGMA threads = 4') // Use up to 4 threads for parallel operations
