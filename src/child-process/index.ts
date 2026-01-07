@@ -56,7 +56,7 @@ export const initHttpServer = async (worker: Worker): Promise<void> => {
 
   const fastifyServer = Fastify({
     serverFactory,
-    logger: true,
+    logger: config.FASTIFY_REQUEST_LOGS_ENABLED,
     connectionTimeout: 0, // Disable connection timeout (allow long-running requests)
     bodyLimit: 1 * 1024 * 1024, // 1MB limit for incoming REQUEST bodies (not responses)
   })

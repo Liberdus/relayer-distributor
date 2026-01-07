@@ -2,6 +2,7 @@ import fp from 'fastify-plugin'
 import { Stream } from 'stream'
 import { Socket } from 'net'
 import * as Logger from '../Logger'
+import { config } from '../Config'
 
 declare module 'fastify' {
   interface FastifyRequest {
@@ -159,12 +160,15 @@ export default fp(async function fastifyTimingPlugin(fastify) {
       timingLog.compressionSavings = `${((1 - compressionRatio) * 100).toFixed(1)}%`
     }
 
-    req.log.info({
-      msg: '[Fastify Timing]',
-      ...timingLog,
-    })
-    if (Logger.mainLogger) {
-      Logger.mainLogger.info('[Fastify Timing]', JSON.stringify(timingLog))
+    // Only log timing information if enabled in config
+    if (config.FASTIFY_TIMING_LOGS_ENABLED) {
+      req.log.info({
+        msg: '[Fastify Timing]',
+        ...timingLog,
+      })
+      if (Logger.mainLogger) {
+        Logger.mainLogger.info('[Fastify Timing]', JSON.stringify(timingLog))
+      }
     }
 
     // Visible in browser DevTools → Network → Headers

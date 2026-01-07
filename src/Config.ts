@@ -36,6 +36,8 @@ export interface Config {
   distributorMode: string
   MQ_DISTRIBUTOR_SERVER_PORT: number
   FASTIFY_COMPRESSION_ENABLED: boolean
+  FASTIFY_REQUEST_LOGS_ENABLED: boolean
+  FASTIFY_TIMING_LOGS_ENABLED: boolean
 }
 
 let config: Config = {
@@ -67,6 +69,8 @@ let config: Config = {
   distributorMode: process.env.DISTRIBUTOR_MODE || distributorMode.WS.toString(),
   MQ_DISTRIBUTOR_SERVER_PORT: 6101,
   FASTIFY_COMPRESSION_ENABLED: false, // Disable compression by default (gzip, deflate)
+  FASTIFY_REQUEST_LOGS_ENABLED: true, // Enable Fastify's built-in request/response logs by default
+  FASTIFY_TIMING_LOGS_ENABLED: true, // Enable timing plugin logs by default
 }
 
 export interface Subscriber {
